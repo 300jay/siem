@@ -2,6 +2,7 @@ import json
 import os
 import time
 from datetime import datetime, timezone
+import threading
 
 import win32file
 
@@ -9,11 +10,17 @@ import win32file
 from etw import ETW, ProviderInfo
 from etw.GUID import GUID
 
-DEBUG_RAW = True
+
+from enrichment import enrich_with_psutil, snapshot_running_processes
+
+DEBUG_RAW = False
+PRINT_NETWORK = False
+RUN_ID = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 PROCESS_PROVIDER = "{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"
 NETWORK_PROVIDER = "{7DD42A49-5329-4832-8DFD-43D979153A88}"
 DNS_PROVIDER = "{1C95126E-7EEA-49A9-A3FE-A378B03DDB4D}"
+LOST_EVENT_PROVIDER = "{6A399AE0-4BC6-4DE9-870B-3657F8947E7E}"
 
 PROCESS_OUT = "etw_process_events.json"
 NETWORK_OUT = "etw_network_events.json"
@@ -25,13 +32,17 @@ NETWORK_EVENT_IDS = {10, 11, 12, 13, 42, 43}  # send, receive, connect and disco
 DNS_QUERY_COMPLETE_IDS = {3008}  # dns query completed
 DNS_QUERY_START_IDS = {3006}     # dns query started
 
-KNOWN_NOISE_IDS={7,8,21}
+KNOWN_NOISE_IDS = {(PROCESS_PROVIDER, i) for i in (3, 4, 5, 6, 7, 8, 9, 10, 21)}
+KNOWN_NOISE_IDS |= {(DNS_PROVIDER, i) for i in (1001, 1016, 3009, 3010, 3011, 3016, 3018, 3019, 3020)}
 INFO_OUT="etw_info_events.jsonl"
 _device_map_cache = None
+_write_lock = threading.Lock()
+known_processes = {}
 
 def classify_and_log(parsed, provider_id, eid, task_name):
-    if eid in KNOWN_NOISE_IDS:
+    if (provider_id,eid) in KNOWN_NOISE_IDS:
         return
+    lost = provider_id == LOST_EVENT_PROVIDER
     info_event = {
         "timestamp": now_iso(),
         "host": os.environ.get("COMPUTERNAME"),
@@ -39,11 +50,14 @@ def classify_and_log(parsed, provider_id, eid, task_name):
         "provider_id": provider_id,
         "event_id": eid,
         "task_name": task_name,
-        "severity": "info",
+        "severity": "warning" if lost else "info",
         "raw": parsed,
     }
     write_event(INFO_OUT, info_event)
-    print(f"[info] provider={provider_id} event_id={eid} task={task_name}")
+    if lost:
+        print("[WARN] ETW reported LOST events - the agent fell behind and events were dropped")
+    else:
+        print(f"[info] provider={provider_id} event_id={eid} task={task_name}")
 def _build_device_map():
     mapping={}
     for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
@@ -56,6 +70,30 @@ def _build_device_map():
         except Exception:
             continue
     return mapping
+
+def emit_process_snapshot():
+    count=0
+    try:
+        for proc in snapshot_running_processes():
+            event = {
+                "timestamp": now_iso(),
+                "host": os.environ.get("COMPUTERNAME"),
+                "source": "snapshot",
+                "provider": "psutil",
+                "event_id": None,
+                "event_type": "process_snapshot",
+                **proc,
+            }
+            write_event(PROCESS_OUT, event)
+            known_processes[proc["pid"]] = proc["image"]
+            count+=1
+            if count % 50 ==0:
+                print(f"[snapshot] {count} processes so far...")
+    except Exception as e:
+        print(f"[snapshot] stopped early after {count} processes: {e!r}")
+        return
+    print(f"[snapshot] wrote {count} already-running processes")
+
 
 def resolve_device_path(path: str) -> str:
     global _device_map_cache
@@ -74,8 +112,11 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 def write_event(path, event: dict):
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(event)+"\n")
+    event["run_id"] = RUN_ID
+    line = json.dumps(event) +"\n"
+    with _write_lock:   
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
 
 def get_event_id(parsed: dict):
     header = parsed.get("EventHeader", {})
@@ -102,7 +143,17 @@ def process_callback(event_tuple):
     if eid not in PROCESS_START_IDS | PROCESS_END_IDS:
         return
 
+    pid = get_field(parsed, "ProcessID", "ProcessId")
+    parent_pid = get_field(parsed, "ParentProcessID", "ParentProcessId")
     image_raw = get_field(parsed, "ImageName","ImageFileName")
+    image = resolve_device_path(image_raw) if image_raw else None
+
+    enrichment = {"command_line": None, "username": None, "parent_image": None}
+    if eid in PROCESS_START_IDS and pid is not None:
+        enrichment=enrich_with_psutil(pid, image)
+        known_processes[pid] = image
+    elif eid in PROCESS_END_IDS:
+        image = known_processes.pop(pid, None) or image
     event ={
         "timestamp": now_iso(),
         "host": os.environ.get("COMPUTERNAME"),
@@ -110,43 +161,19 @@ def process_callback(event_tuple):
         "provider": "Kernel-Process",
         "event_id": eid,
         "event_type": "process_start" if eid in PROCESS_START_IDS else "process_end",
-        "pid": get_field(parsed, "ProcessID", "ProcessId"),
-        "parent_pid": get_field(parsed, "ParentProcessID", "ParentProcessId"),
-        "image": resolve_device_path(image_raw) if image_raw else None,
-        "command_line": get_field(parsed, "CommandLine") or None,  # expected empty -- see module docstring
+        "pid": pid,
+        "parent_pid": parent_pid,
+        "parent_image": os.path.basename(known_processes.get(parent_pid) or "") or enrichment["parent_image"],
+        "image": image,
+        "command_line": enrichment["command_line"],
+        "user": enrichment["username"],
         "user_sid": get_field(parsed, "UserSID"),
         "exit_code": get_field(parsed, "ExitStatus"),
         "raw": parsed if DEBUG_RAW else None,
     }
     write_event(PROCESS_OUT, event)
-    print(f"[process] pid={event['pid']} image={event['image']}")
-
-def process_callback(event_tuple):
-    event_id_raw, parsed = event_tuple
-    if DEBUG_RAW:
-        print("[RAW process]", parsed)
-    eid= get_event_id(parsed)
-    if eid not in PROCESS_START_IDS | PROCESS_END_IDS:
-        return
-
-    image_raw = get_field(parsed, "ImageName","ImageFileName")
-    event ={
-        "timestamp": now_iso(),
-        "host": os.environ.get("COMPUTERNAME"),
-        "source": "etw_proc",
-        "provider": "Kernel-Process",
-        "event_id": eid,
-        "event_type": "process_start" if eid in PROCESS_START_IDS else "process_end",
-        "pid": get_field(parsed, "ProcessID", "ProcessId"),
-        "parent_pid": get_field(parsed, "ParentProcessID", "ParentProcessId"),
-        "image": resolve_device_path(image_raw) if image_raw else None,
-        "command_line": get_field(parsed, "CommandLine") or None,  # expected empty -- see module docstring
-        "user_sid": get_field(parsed, "UserSID"),
-        "exit_code": get_field(parsed, "ExitStatus"),
-        "raw": parsed if DEBUG_RAW else None,
-    }
-    write_event(PROCESS_OUT, event)
-    print(f"[process] pid={event['pid']} image={event['image']}")
+    print(f"[process] pid={event['pid']} image={event['image']} "
+          f"parent={event['parent_image']} cmd={event['command_line']}")
 
 def network_callback(event_tuple):
     event_id_raw, parsed = event_tuple
@@ -174,14 +201,14 @@ def network_callback(event_tuple):
         "raw": parsed if DEBUG_RAW else None,
     }
     write_event(NETWORK_OUT, event)
-    print(f"[network] pid={event['pid']} {event['src_ip']}:{event['src_port']} -> "
-          f"{event['dst_ip']}:{event['dst_port']} ({event['size']}B)")
-
+    if PRINT_NETWORK:
+        print(f"[network] pid={event['pid']} {event['src_ip']}:{event['src_port']} -> "
+              f"{event['dst_ip']}:{event['dst_port']} ({event['size']}B)")
 def dns_callback(event_tuple):
     event_id_raw, parsed = event_tuple
     if DEBUG_RAW:
         print("[RAW dns]", parsed)
- 
+    dns_pid = get_field(parsed, "PID", "ProcessID") or parsed.get("EventHeader", {}).get("ProcessId")
     eid = get_event_id(parsed)
     if eid not in DNS_QUERY_COMPLETE_IDS | DNS_QUERY_START_IDS:
         return
@@ -193,10 +220,11 @@ def dns_callback(event_tuple):
         "provider": "DNS-Client",
         "event_id": eid,
         "event_type": "dns",
-        "pid": get_field(parsed, "PID", "ProcessID"),
+        "pid": str(dns_pid) if dns_pid is not None else None,
         "dns_query": get_field(parsed, "QueryName"),
         "query_type": get_field(parsed, "QueryType"),
         "dns_result": get_field(parsed, "QueryResults") if eid in DNS_QUERY_COMPLETE_IDS else None,
+        "query_status": get_field(parsed, "QueryStatus"),
         "raw": parsed if DEBUG_RAW else None,
     }
     write_event(DNS_OUT, event)
@@ -235,6 +263,7 @@ def run():
     if DEBUG_RAW:
         print("DEBUG_RAW is true")
     etw.start()
+    threading.Thread(target=emit_process_snapshot, daemon=True, name="snapshot").start()
     try:
         while True:
             time.sleep(1)
