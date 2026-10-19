@@ -1,208 +1,171 @@
 const express = require("express");
-const { exec } = require("child_process");
+const { MongoClient } = require("mongodb");
 
 const app = express();
+app.use(express.json());
 
-function parseSecurityEvent(log) {
+// Allow React dev server to call this API
+app.use((req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    next();
+});
 
-    const message = log.Message || "";
+// ---------------------------------------------------------------------------
+// MongoDB connection
+// ---------------------------------------------------------------------------
+const MONGO_URI = process.env.SIEM_MONGO_URI || "mongodb://localhost:27017/";
+const DB_NAME   = "siem_db";
 
-    const result = {
-        timestamp: null,
-        event_id: log.Id,
-        level: log.LevelDisplayName,
-        provider: log.ProviderName,
-        event_type: null,
-        account_name: null,
-        logon_type: null,
-        process_name: null,
-        authentication_package: null
-    };
+let db;
 
-    const milliseconds = Number(
-        log.TimeCreated.replace("/Date(", "").replace(")/", "")
-    );
-
-    result.timestamp = new Date(milliseconds).toISOString();
-
-    if (log.Id === 4624) {
-
-        result.event_type = "successful_logon";
-
-        const accountMatch = message.match(
-            /New Logon:[\s\S]*?Account Name:\s*(.+)/
-        );
-
-        if (accountMatch) {
-            result.account_name = accountMatch[1].trim();
-        }
-
-        const logonTypeMatch = message.match(
-            /Logon Type:\s*(\d+)/
-        );
-
-        if (logonTypeMatch) {
-            result.logon_type = Number(logonTypeMatch[1]);
-        }
-
-        const processMatch = message.match(
-            /Process Name:\s*(.+)/
-        );
-
-        if (processMatch) {
-            result.process_name = processMatch[1].trim();
-        }
-
-        const authMatch = message.match(
-            /Authentication Package:\s*(.+)/
-        );
-
-        if (authMatch) {
-            result.authentication_package = authMatch[1].trim();
-        }
-    }
-
-    if (log.Id === 4798) {
-
-        result.event_type = "user_group_membership_enumerated";
-
-        const accountMatch = message.match(
-            /User:\s*[\s\S]*?Account Name:\s*(.+)/
-        );
-
-        if (accountMatch) {
-            result.account_name = accountMatch[1].trim();
-        }
-
-        const processMatch = message.match(
-            /Process Name:\s*(.+)/
-        );
-
-        if (processMatch) {
-            result.process_name = processMatch[1].trim();
-        }
-    }
-
-    return result;
+async function connectMongo() {
+    const client = new MongoClient(MONGO_URI, { serverSelectionTimeoutMS: 5000 });
+    await client.connect();
+    db = client.db(DB_NAME);
+    console.log(`[mongo] Connected to ${MONGO_URI} -> ${DB_NAME}`);
 }
 
-app.get("/logs/windows/security/4624", (req, res) => {
+// ---------------------------------------------------------------------------
+// Shared query helpers
+// ---------------------------------------------------------------------------
 
-    const command = `Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624} -MaxEvents 5 | Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, Message | ConvertTo-Json`;
+/**
+ * Parse common query params shared by every list endpoint:
+ *   ?limit=50&skip=0&from=<ISO>&to=<ISO>&severity=high
+ */
+function parseParams(query) {
+    const limit    = Math.min(parseInt(query.limit  || "50",  10), 500);
+    const skip     = parseInt(query.skip   || "0",  10);
+    const filter   = {};
 
-    exec(`powershell -Command "${command}"`, (error, stdout, stderr) => {
+    if (query.from || query.to) {
+        filter.timestamp = {};
+        if (query.from) filter.timestamp.$gte = query.from;
+        if (query.to)   filter.timestamp.$lte = query.to;
+    }
+    if (query.severity) filter.severity = query.severity;
+    if (query.rule_id)  filter.rule_id  = query.rule_id;
+    if (query.pid)      filter.pid      = parseInt(query.pid, 10);
+    if (query.host)     filter.host     = query.host;
 
-        if (error) {
-            return res.status(500).json({
-                error: error.message
-            });
-        }
+    return { limit, skip, filter };
+}
 
-        if (stderr) {
-            return res.status(500).json({
-                error: stderr
-            });
-        }
+async function listDocs(collection, query, extraFilter = {}) {
+    const { limit, skip, filter } = parseParams(query);
+    const merged = { ...filter, ...extraFilter };
+    const docs = await db.collection(collection)
+        .find(merged, { projection: { _id: 0 } })
+        .sort({ timestamp: -1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray();
+    const total = await db.collection(collection).countDocuments(merged);
+    return { total, skip, limit, results: docs };
+}
 
-        try {
+// ---------------------------------------------------------------------------
+// Alerts
+// ---------------------------------------------------------------------------
 
-            let logs = JSON.parse(stdout);
+// GET /api/alerts  — list alerts (paginated, filterable)
+app.get("/api/alerts", async (req, res) => {
+    try {
+        res.json(await listDocs("alerts", req.query));
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
-            if (!Array.isArray(logs)) {
-                logs = [logs];
-            }
+// GET /api/alerts/stats  — count by severity
+app.get("/api/alerts/stats", async (req, res) => {
+    try {
+        const pipeline = [
+            { $group: { _id: "$severity", count: { $sum: 1 } } },
+            { $sort: { count: -1 } }
+        ];
+        const rows = await db.collection("alerts").aggregate(pipeline).toArray();
+        res.json(rows);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
-            const formattedLogs = logs.map(log => {
-                return parseSecurityEvent(log);
-            });
+// ---------------------------------------------------------------------------
+// Process events
+// ---------------------------------------------------------------------------
 
-            res.json(formattedLogs);
+// GET /api/events/process
+app.get("/api/events/process", async (req, res) => {
+    try {
+        const extra = {};
+        if (req.query.image) extra.image = { $regex: req.query.image, $options: "i" };
+        res.json(await listDocs("events_process", req.query, extra));
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
-        } catch (parseError) {
+// ---------------------------------------------------------------------------
+// Network events
+// ---------------------------------------------------------------------------
 
-            res.status(500).json({
-                error: "Could not parse Windows 4624 logs"
-            });
+// GET /api/events/network
+app.get("/api/events/network", async (req, res) => {
+    try {
+        const extra = {};
+        if (req.query.dst_ip)   extra.dst_ip   = req.query.dst_ip;
+        if (req.query.protocol) extra.protocol = req.query.protocol;
+        res.json(await listDocs("events_network", req.query, extra));
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
-        }
+// ---------------------------------------------------------------------------
+// DNS events
+// ---------------------------------------------------------------------------
+
+// GET /api/events/dns
+app.get("/api/events/dns", async (req, res) => {
+    try {
+        const extra = {};
+        if (req.query.query) extra.dns_query = { $regex: req.query.query, $options: "i" };
+        res.json(await listDocs("events_dns", req.query, extra));
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Health check
+// ---------------------------------------------------------------------------
+app.get("/health", async (req, res) => {
+    try {
+        await db.command({ ping: 1 });
+        res.json({ status: "ok", db: DB_NAME });
+    } catch (e) {
+        res.status(503).json({ status: "error", error: e.message });
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------------
+connectMongo()
+    .then(() => {
+        app.listen(3000, () => {
+            console.log("SIEM API listening on http://localhost:3000");
+            console.log("  GET /api/alerts");
+            console.log("  GET /api/alerts/stats");
+            console.log("  GET /api/events/process");
+            console.log("  GET /api/events/network");
+            console.log("  GET /api/events/dns");
+            console.log("  GET /health");
+        });
+    })
+    .catch(err => {
+        console.error("[mongo] Connection failed:", err.message);
+        process.exit(1);
     });
-});
-
-app.get("/logs/windows/security", (req, res) => {
-
-    const command = `Get-WinEvent -LogName Security -MaxEvents 5 | Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, Message | ConvertTo-Json`;
-
-    exec(`powershell -Command "${command}"`, (error, stdout, stderr) => {
-
-        if (error) {
-            return res.status(500).json({
-                error: error.message
-            });
-        }
-
-        if (stderr) {
-            return res.status(500).json({
-                error: stderr
-            });
-        }
-
-        try {
-
-            let logs = JSON.parse(stdout);
-
-            if (!Array.isArray(logs)) {
-                logs = [logs];
-            }
-
-            const formattedLogs = logs.map(log => {
-                return parseSecurityEvent(log);
-            });
-
-            res.json(formattedLogs);
-
-        } catch (parseError) {
-
-            res.status(500).json({
-                error: "Could not parse Windows Security logs"
-            });
-        }
-    });
-});
-app.get("/logs/windows", (req, res) => {
-
-    const command = `Get-WinEvent -LogName System -MaxEvents 10 | Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, Message | ConvertTo-Json`;
-
-    exec(`powershell -Command "${command}"`, (error, stdout, stderr) => {
-
-        if (error) {
-            return res.status(500).json({
-                error: error.message
-            });
-        }
-
-        if (stderr) {
-            return res.status(500).json({
-                error: stderr
-            });
-        }
-
-        try {
-            let logs = JSON.parse(stdout);
-
-            if (!Array.isArray(logs)) {
-                logs = [logs];
-            }
-
-            res.json(logs);
-
-        } catch (parseError) {
-            res.status(500).json({
-                error: "Could not parse Windows logs"
-            });
-        }
-    });
-});
-
-app.listen(3000, () => {
-    console.log("Server running on http://localhost:3000");
-});

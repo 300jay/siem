@@ -3,12 +3,14 @@ import os
 import time
 from datetime import datetime, timezone
 import threading
+import uuid
 
 import win32file
 
 # etw imports
 from etw import ETW, ProviderInfo
 from etw.GUID import GUID
+from alerts import RuleEngine
 
 
 from enrichment import enrich_with_psutil, snapshot_running_processes
@@ -25,6 +27,8 @@ LOST_EVENT_PROVIDER = "{6A399AE0-4BC6-4DE9-870B-3657F8947E7E}"
 PROCESS_OUT = "etw_process_events.json"
 NETWORK_OUT = "etw_network_events.json"
 DNS_OUT = "etw_dns_events.json"
+ALERTS_OUT = "alerts.jsonl"
+engine = RuleEngine(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules.json"))
 
 PROCESS_START_IDS = {1}      # event id for a start of process
 PROCESS_END_IDS = {2}        # event id for end of a process
@@ -111,12 +115,26 @@ def resolve_device_path(path: str) -> str:
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
+def run_engine(event: dict):
+    # Runs inside write_event's lock, so the snapshot thread and the ETW callbacks never use the engine at once.
+    # A failing rule must never break collection, so errors are printed and swallowed.
+    try:
+        for alert in engine.process_event(event):
+            with open(ALERTS_OUT, "a", encoding="utf-8") as f:
+                f.write(json.dumps(alert) + "\n")
+            print(f"[ALERT] {alert['severity']} {alert['rule_id']} pid={alert['pid']} {alert['image']}")
+    except Exception as e:
+        print(f"[engine error] {e!r}")
+
 def write_event(path, event: dict):
     event["run_id"] = RUN_ID
+    event["uid"] = uuid.uuid4().hex
     line = json.dumps(event) +"\n"
     with _write_lock:   
         with open(path, "a", encoding="utf-8") as f:
             f.write(line)
+        if path != INFO_OUT:
+            run_engine(event)
 
 def get_event_id(parsed: dict):
     header = parsed.get("EventHeader", {})

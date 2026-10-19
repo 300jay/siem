@@ -1,0 +1,313 @@
+{
+  "rules": [
+    {
+      "id": "office_spawns_shell",
+      "title": "Office/PDF application spawned a shell or script host",
+      "severity": "high",
+      "attack": ["T1204.002", "T1059"],
+      "on": ["process_start"],
+      "type": "match",
+      "watch": true,
+      "match": {
+        "parent_image_in": ["winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe", "onenote.exe", "msaccess.exe", "mspub.exe", "acrord32.exe", "acrobat.exe", "foxitreader.exe"],
+        "image_in": ["cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe", "mshta.exe", "rundll32.exe", "regsvr32.exe", "bitsadmin.exe", "certutil.exe"]
+      }
+    },
+    {
+      "id": "browser_spawns_shell",
+      "title": "Browser spawned a shell or script host",
+      "severity": "medium",
+      "attack": ["T1189", "T1059"],
+      "on": ["process_start"],
+      "type": "match",
+      "watch": true,
+      "match": {
+        "parent_image_in": ["chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "iexplore.exe"],
+        "image_in": ["cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe", "mshta.exe"]
+      }
+    },
+    {
+      "id": "user_writable_path_exec",
+      "title": "Executable running from a user-writable location (Temp, Downloads, Public, Recycle Bin)",
+      "severity": "medium",
+      "attack": ["T1204", "T1036"],
+      "on": ["process_start", "process_snapshot"],
+      "type": "match",
+      "watch": true,
+      "match": {
+        "image_path_contains_any": ["\\appdata\\local\\temp\\", "\\windows\\temp\\", "\\downloads\\", "\\users\\public\\", "\\$recycle.bin\\", "\\perflogs\\"]
+      }
+    },
+    {
+      "id": "double_extension_exec",
+      "title": "Executable with a document-style double extension (e.g. invoice.pdf.exe)",
+      "severity": "high",
+      "attack": ["T1036.007"],
+      "on": ["process_start", "process_snapshot"],
+      "type": "match",
+      "watch": true,
+      "match": {
+        "image_regex": "\\.(pdf|docx?|xlsx?|pptx?|txt|jpe?g|png|zip)\\.(exe|scr|com|bat|cmd|js|vbs|pif)$"
+      }
+    },
+    {
+      "id": "script_host_start",
+      "title": "Windows Script Host started (wscript/cscript)",
+      "severity": "medium",
+      "attack": ["T1059.005", "T1059.007"],
+      "on": ["process_start"],
+      "type": "match",
+      "match": { "image_in": ["wscript.exe", "cscript.exe"] }
+    },
+    {
+      "id": "mshta_start",
+      "title": "mshta.exe started",
+      "severity": "high",
+      "attack": ["T1218.005"],
+      "on": ["process_start"],
+      "type": "match",
+      "watch": true,
+      "match": { "image_in": ["mshta.exe"] }
+    },
+    {
+      "id": "encoded_powershell",
+      "title": "PowerShell run with an encoded command",
+      "severity": "high",
+      "attack": ["T1059.001", "T1027"],
+      "on": ["process_start"],
+      "type": "match",
+      "watch": true,
+      "match": {
+        "image_in": ["powershell.exe", "pwsh.exe"],
+        "command_line_regex": "\\s-(e|ec|enc|encodedcommand)\\s+[A-Za-z0-9+/=]{20,}"
+      }
+    },
+    {
+      "id": "powershell_download_cradle",
+      "title": "PowerShell command line contains a download or in-memory execution pattern",
+      "severity": "high",
+      "attack": ["T1059.001", "T1105"],
+      "on": ["process_start"],
+      "type": "match",
+      "watch": true,
+      "match": {
+        "image_in": ["powershell.exe", "pwsh.exe"],
+        "command_line_contains_any": ["downloadstring", "downloadfile", "invoke-webrequest", "invoke-expression", "net.webclient", "start-bitstransfer", "frombase64string", "iex(", "iex "]
+      }
+    },
+    {
+      "id": "powershell_hidden_window",
+      "title": "PowerShell started with a hidden window",
+      "severity": "medium",
+      "attack": ["T1564.003"],
+      "on": ["process_start"],
+      "type": "match",
+      "match": {
+        "image_in": ["powershell.exe", "pwsh.exe"],
+        "command_line_regex": "-(w|win|windowstyle)\\s+hidden"
+      }
+    },
+    {
+      "id": "lolbin_download_or_proxy_exec",
+      "title": "Living-off-the-land binary used to download or proxy-execute code",
+      "severity": "high",
+      "attack": ["T1105", "T1218"],
+      "on": ["process_start"],
+      "type": "match",
+      "watch": true,
+      "match": {
+        "command_line_contains_any": ["certutil -urlcache", "certutil.exe -urlcache", "-urlcache -split", "bitsadmin /transfer", "bitsadmin.exe /transfer", "/i:http", "rundll32 javascript:", "mshta http", "mshta vbscript"]
+      }
+    },
+    {
+      "id": "persistence_commands",
+      "title": "Command that creates persistence (scheduled task, Run key, service, new admin account)",
+      "severity": "medium",
+      "attack": ["T1053.005", "T1547.001", "T1543.003", "T1136.001"],
+      "on": ["process_start"],
+      "type": "match",
+      "match": {
+        "command_line_regex_any": [
+          "schtasks(\\.exe)?\\s+/create",
+          "reg(\\.exe)?\\s+add\\s+.*\\\\(run|runonce)\\b",
+          "\\bsc(\\.exe)?\\s+create\\b",
+          "net1?(\\.exe)?\\s+user\\s+.*\\s/add",
+          "net1?(\\.exe)?\\s+localgroup\\s+administrators\\s+.*\\s/add"
+        ]
+      }
+    },
+    {
+      "id": "defense_tampering",
+      "title": "Command that destroys backups, clears logs or disables defenses",
+      "severity": "high",
+      "attack": ["T1490", "T1070.001", "T1562.001"],
+      "on": ["process_start"],
+      "type": "match",
+      "match": {
+        "command_line_regex_any": [
+          "vssadmin(\\.exe)?\\s+delete\\s+shadows",
+          "wmic.*shadowcopy\\s+delete",
+          "wevtutil(\\.exe)?\\s+cl\\b",
+          "bcdedit.*(recoveryenabled\\s+no|bootstatuspolicy\\s+ignoreallfailures)",
+          "set-mppreference.*disable(realtimemonitoring|behaviormonitoring)",
+          "netsh\\s+advfirewall\\s+set\\s+\\w+\\s+state\\s+off"
+        ]
+      }
+    },
+
+    {
+      "id": "system_binary_wrong_path",
+      "title": "System process name running from an unexpected location (masquerading)",
+      "severity": "high",
+      "attack": ["T1036.005"],
+      "on": ["process_start", "process_snapshot"],
+      "type": "builtin",
+      "builtin": "system_binary_wrong_path",
+      "params": {
+        "binaries": {
+          "svchost.exe":       { "path_prefixes": ["c:\\windows\\system32\\"] },
+          "lsass.exe":         { "path_prefixes": ["c:\\windows\\system32\\"] },
+          "csrss.exe":         { "path_prefixes": ["c:\\windows\\system32\\"] },
+          "services.exe":      { "path_prefixes": ["c:\\windows\\system32\\"] },
+          "smss.exe":          { "path_prefixes": ["c:\\windows\\system32\\"] },
+          "wininit.exe":       { "path_prefixes": ["c:\\windows\\system32\\"] },
+          "winlogon.exe":      { "path_prefixes": ["c:\\windows\\system32\\"] },
+          "taskhostw.exe":     { "path_prefixes": ["c:\\windows\\system32\\"] },
+          "runtimebroker.exe": { "path_prefixes": ["c:\\windows\\system32\\"] },
+          "explorer.exe":      { "path_prefixes": ["c:\\windows\\"] }
+        }
+      }
+    },
+    {
+      "id": "system_binary_wrong_parent",
+      "title": "System process started by an unexpected parent",
+      "severity": "high",
+      "attack": ["T1036", "T1055"],
+      "on": ["process_start", "process_snapshot"],
+      "type": "builtin",
+      "builtin": "system_binary_wrong_parent",
+      "params": {
+        "binaries": {
+          "svchost.exe":       { "parents": ["services.exe", "msmpeng.exe"] },
+          "services.exe":      { "parents": ["wininit.exe"] },
+          "lsass.exe":         { "parents": ["wininit.exe"] },
+          "taskhostw.exe":     { "parents": ["svchost.exe"] },
+          "runtimebroker.exe": { "parents": ["svchost.exe"] }
+        }
+      }
+    },
+    {
+      "id": "recon_burst",
+      "title": "Several different reconnaissance tools run from the same parent in a short time",
+      "severity": "medium",
+      "attack": ["T1033", "T1082", "T1087", "T1016"],
+      "on": ["process_start"],
+      "type": "builtin",
+      "builtin": "recon_burst",
+      "cooldown": 300,
+      "params": {
+        "tools": ["whoami.exe", "net.exe", "net1.exe", "ipconfig.exe", "systeminfo.exe", "tasklist.exe", "nltest.exe", "arp.exe", "hostname.exe", "netstat.exe", "quser.exe"],
+        "window_sec": 60,
+        "min_distinct": 3
+      }
+    },
+    {
+      "id": "process_burst",
+      "title": "One parent started a large number of processes in a few seconds",
+      "severity": "low",
+      "attack": ["T1059"],
+      "on": ["process_start"],
+      "type": "builtin",
+      "builtin": "process_burst",
+      "cooldown": 300,
+      "params": {
+        "window_sec": 10,
+        "min_starts": 20,
+        "exclude_parents": ["chrome.exe", "msedge.exe", "firefox.exe", "code.exe", "discord.exe", "svchost.exe", "services.exe", "explorer.exe", "steam.exe", "steamwebhelper.exe"]
+      }
+    },
+    {
+      "id": "lolbin_network",
+      "title": "Living-off-the-land binary made an outbound connection",
+      "severity": "high",
+      "attack": ["T1105", "T1218"],
+      "on": ["network"],
+      "type": "builtin",
+      "builtin": "lolbin_network",
+      "cooldown": 600,
+      "params": {
+        "images": ["certutil.exe", "mshta.exe", "regsvr32.exe", "bitsadmin.exe", "rundll32.exe", "wscript.exe", "cscript.exe", "installutil.exe", "regasm.exe", "regsvcs.exe", "msbuild.exe"]
+      }
+    },
+    {
+      "id": "unexpected_network_process",
+      "title": "Process that normally does not use the network connected to the internet",
+      "severity": "low",
+      "attack": ["T1055", "T1071"],
+      "on": ["network"],
+      "type": "builtin",
+      "builtin": "unexpected_network_process",
+      "cooldown": 600,
+      "params": {
+        "images": ["notepad.exe", "calc.exe", "mspaint.exe", "write.exe", "wordpad.exe"]
+      }
+    },
+    {
+      "id": "spawn_then_connect",
+      "title": "Suspicious process made an outbound connection",
+      "severity": "high",
+      "attack": ["T1204", "T1105"],
+      "on": ["network"],
+      "type": "builtin",
+      "builtin": "spawn_then_connect",
+      "cooldown": 600,
+      "params": { "window_sec": 300 }
+    },
+    {
+      "id": "dns_failure_storm",
+      "title": "Process generating a high rate of failed DNS lookups",
+      "severity": "medium",
+      "attack": ["T1568.002"],
+      "on": ["dns"],
+      "type": "builtin",
+      "builtin": "dns_failure_storm",
+      "cooldown": 300,
+      "params": {
+        "window_sec": 60,
+        "min_failures": 50,
+        "ignore_status": ["0", "9501"]
+      }
+    },
+    {
+      "id": "dga_like_name",
+      "title": "DNS query for a random-looking domain name",
+      "severity": "medium",
+      "attack": ["T1568.002"],
+      "on": ["dns"],
+      "type": "builtin",
+      "builtin": "dga_like_name",
+      "cooldown": 600,
+      "params": {
+        "min_len": 12,
+        "min_entropy": 3.4,
+        "max_vowel_ratio": 0.3,
+        "allow_suffixes": [".microsoft.com", ".windows.net", ".azure.com", ".azureedge.net", ".trafficmanager.net", ".amazonaws.com", ".cloudfront.net", ".google.com", ".googleapis.com", ".gvt1.com", ".gvt2.com", ".1e100.net", ".steamserver.net", ".steampowered.com", ".local", ".in-addr.arpa", ".ip6.arpa"]
+      }
+    },
+    {
+      "id": "dns_tunnel_shape",
+      "title": "DNS query with an unusually long name or label (possible tunneling)",
+      "severity": "medium",
+      "attack": ["T1071.004", "T1048.003"],
+      "on": ["dns"],
+      "type": "builtin",
+      "builtin": "dns_tunnel_shape",
+      "cooldown": 600,
+      "params": {
+        "max_name_len": 100,
+        "max_label_len": 50,
+        "allow_suffixes": [".microsoft.com", ".windows.net", ".azure.com", ".azureedge.net", ".trafficmanager.net", ".amazonaws.com", ".cloudfront.net", ".in-addr.arpa", ".ip6.arpa"]
+      }
+    }
+  ]
+}
