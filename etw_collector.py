@@ -6,6 +6,7 @@ import threading
 import uuid
 
 import win32file
+from pymongo import MongoClient
 
 # etw imports
 from etw import ETW, ProviderInfo
@@ -19,6 +20,15 @@ DEBUG_RAW = False
 PRINT_NETWORK = False
 RUN_ID = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
+# now mongo has been added in
+MONGO_URI = os.environ.get("SIEM_MONGO_URI", "mongodb://localhost:27017/")
+_mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+_db = _mongo_client["siem_db"]
+_col_process = _db["events_process"]
+_col_network = _db["events_network"]
+_col_dns     = _db["events_dns"]
+_col_alerts  = _db["alerts"]
+
 PROCESS_PROVIDER = "{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"
 NETWORK_PROVIDER = "{7DD42A49-5329-4832-8DFD-43D979153A88}"
 DNS_PROVIDER = "{1C95126E-7EEA-49A9-A3FE-A378B03DDB4D}"
@@ -28,6 +38,12 @@ PROCESS_OUT = "etw_process_events.json"
 NETWORK_OUT = "etw_network_events.json"
 DNS_OUT = "etw_dns_events.json"
 ALERTS_OUT = "alerts.jsonl"
+
+_COLLECTION_MAP = {
+    PROCESS_OUT: _col_process,
+    NETWORK_OUT: _col_network,
+    DNS_OUT:     _col_dns,
+}
 engine = RuleEngine(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules.json"))
 
 PROCESS_START_IDS = {1}      # event id for a start of process
@@ -116,20 +132,40 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 def run_engine(event: dict):
-    # Runs inside write_event's lock, so the snapshot thread and the ETW callbacks never use the engine at once.
-    # A failing rule must never break collection, so errors are printed and swallowed.
+    
     try:
-        for alert in engine.process_event(event):
+        alerts = engine.process_event(event)
+        if alerts:
+            # mongo alerts insert
+            try:
+                _col_alerts.insert_many([dict(a) for a in alerts], ordered=False)
+            except Exception as me:
+                print(f"[mongo alert error] {me!r}")
+
+            # write locally if mongo isnt connected
             with open(ALERTS_OUT, "a", encoding="utf-8") as f:
-                f.write(json.dumps(alert) + "\n")
-            print(f"[ALERT] {alert['severity']} {alert['rule_id']} pid={alert['pid']} {alert['image']}")
+                for alert in alerts:
+                    f.write(json.dumps(alert) + "\n")
+                    print(f"[ALERT] {alert['severity']} {alert['rule_id']} pid={alert['pid']} {alert['image']}")
     except Exception as e:
         print(f"[engine error] {e!r}")
 
 def write_event(path, event: dict):
     event["run_id"] = RUN_ID
     event["uid"] = uuid.uuid4().hex
-    line = json.dumps(event) +"\n"
+
+    # Store event in mongo
+    col = _COLLECTION_MAP.get(path)
+    if col is not None:
+        try:
+            # Create a clean copy to insert into MongoDB without modifying the event object
+            doc = dict(event)
+            col.insert_one(doc)
+        except Exception as me:
+            print(f"[mongo event error] {me!r}")
+
+    # local write(fallback for now)
+    line = json.dumps(event) + "\n"
     with _write_lock:   
         with open(path, "a", encoding="utf-8") as f:
             f.write(line)
