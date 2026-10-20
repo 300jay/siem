@@ -138,6 +138,100 @@ app.get("/api/events/dns", async (req, res) => {
     }
 });
 
+
+// ---------------------------------------------------------------------------
+// Traffic Intelligence
+// ---------------------------------------------------------------------------
+
+// GET /api/traffic-intelligence?limit=100
+app.get("/api/traffic-intelligence", async (req, res) => {
+    try {
+        const collection = db.collection("events_network");
+
+        const requestedLimit = parseInt(req.query.limit || "100", 10);
+        const limit = Math.min(
+            Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 100, 1),
+            200
+        );
+
+        const [
+            totalConnections,
+            protocols,
+            topSources,
+            topDestinations,
+            events
+        ] = await Promise.all([
+            collection.countDocuments(),
+
+            collection.aggregate([
+                {
+                    $group: {
+                        _id: { $ifNull: ["$protocol", "Unknown"] },
+                        connections: { $sum: 1 }
+                    }
+                },
+                { $sort: { connections: -1 } },
+                { $limit: 10 }
+            ]).toArray(),
+
+            collection.aggregate([
+                { $match: { src_ip: { $exists: true, $ne: null } } },
+                {
+                    $group: {
+                        _id: "$src_ip",
+                        connections: { $sum: 1 }
+                    }
+                },
+                { $sort: { connections: -1 } },
+                { $limit: 10 }
+            ]).toArray(),
+
+            collection.aggregate([
+                { $match: { dst_ip: { $exists: true, $ne: null } } },
+                {
+                    $group: {
+                        _id: "$dst_ip",
+                        connections: { $sum: 1 }
+                    }
+                },
+                { $sort: { connections: -1 } },
+                { $limit: 10 }
+            ]).toArray(),
+
+            collection.find(
+                {},
+                { projection: { _id: 0 } }
+            )
+            .sort({ timestamp: -1 })
+            .limit(limit)
+            .toArray()
+        ]);
+
+        res.json({
+            totalConnections,
+            protocols: protocols.map(item => ({
+                protocol: String(item._id),
+                connections: item.connections
+            })),
+            topSources: topSources.map(item => ({
+                ip: String(item._id),
+                connections: item.connections
+            })),
+            topDestinations: topDestinations.map(item => ({
+                ip: String(item._id),
+                connections: item.connections
+            })),
+            events
+        });
+
+    } catch (error) {
+        console.error("[traffic-intelligence] Error:", error.message);
+        res.status(500).json({
+            error: "Failed to load traffic intelligence"
+        });
+    }
+});
+
 // ---------------------------------------------------------------------------
 // Health check
 // ---------------------------------------------------------------------------
@@ -162,6 +256,7 @@ connectMongo()
             console.log("  GET /api/events/process");
             console.log("  GET /api/events/network");
             console.log("  GET /api/events/dns");
+            console.log("  GET /api/traffic-intelligence");
             console.log("  GET /health");
         });
     })
