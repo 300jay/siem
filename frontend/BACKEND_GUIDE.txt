@@ -1,0 +1,206 @@
+===============================================================================
+BACKEND GUIDE  --  READ THIS FIRST IF YOU ARE WIRING UP THE REAL DATA
+===============================================================================
+
+This is written for the person connecting a real database to this dashboard.
+You do not need to know the frontend. You barely need to open it.
+
+
+-------------------------------------------------------------------------------
+THE ONE IDEA
+-------------------------------------------------------------------------------
+
+The frontend never touches data directly. It only ever asks the server for a
+web address and draws whatever comes back.
+
+    Browser  --asks-->  /api/alerts  --->  api/routes.js  --->  (your database)
+    Browser  <--JSON--  [{...},{...}]  <---
+
+So your whole job is: make the routes in `api/routes.js` return real data in
+the same SHAPE the fake data uses. Nothing in `public/` has to change.
+
+
+-------------------------------------------------------------------------------
+GETTING IT RUNNING (2 commands)
+-------------------------------------------------------------------------------
+
+    npm install
+    npm start
+
+Then open  http://localhost:3000
+
+Stop it with Ctrl + C.
+Use `npm run dev` instead if you want it to restart automatically when you
+save a file.
+
+Node.js 18 or newer is required. Check with:  node -v
+
+
+-------------------------------------------------------------------------------
+WHERE EVERYTHING LIVES
+-------------------------------------------------------------------------------
+
+    server.js              Starts the server. You will rarely touch this.
+    api/routes.js          <-- YOU WORK HERE. Every web address is defined here.
+    api/mock-data.js       <-- AND HERE. All fake data + the shape documentation.
+    public/                The dashboard itself. You can ignore this folder.
+      index.html             Dashboard page
+      pages/*.html           The other 7 pages
+      css/styles.css         All styling
+      js/common.js           Sidebar, header, helpers shared by every page
+      js/<page>.js           One file per page
+
+
+-------------------------------------------------------------------------------
+HOW TO REPLACE ONE ROUTE WITH REAL DATA
+-------------------------------------------------------------------------------
+
+Open `api/routes.js` and find the route. They all look like this:
+
+    router.get('/alerts', safely(async (req, res) => {
+      // TODO (backend): replace with your real query.
+      res.json(mock.getAlerts());
+    }));
+
+Change the one line in the middle:
+
+    router.get('/alerts', safely(async (req, res) => {
+      const result = await db.query(
+        'SELECT id, title, description, severity, source, time, status ' +
+        'FROM alerts ORDER BY time DESC'
+      );
+      res.json({ rows: result.rows });
+    }));
+
+Done. Refresh the browser and real alerts appear.
+
+The ONLY rule: the object you send must match the shape documented above that
+function in `api/mock-data.js`. Every function there has a comment like:
+
+    SHAPE: { rows: [ { id, title, description, severity, source, time, status } ] }
+
+Match that and the page works. Get a field name wrong and that column shows
+as blank or "undefined" -- which is your clue about what to fix.
+
+Search the project for "TODO (backend)" to find all of them at once.
+
+
+-------------------------------------------------------------------------------
+THE FULL LIST OF ADDRESSES
+-------------------------------------------------------------------------------
+
+  PAGE                   ADDRESS                   RETURNS
+  ---------------------  ------------------------  --------------------------
+  Dashboard              GET /api/overview         six metric cards
+                         GET /api/traffic-series   the line chart points
+                         GET /api/connection-status active vs closed
+  Network Analytics      GET /api/protocols        protocol breakdown
+                         GET /api/performance      latency, loss, throughput
+  Traffic Intelligence   GET /api/geo              traffic by country
+                         GET /api/direction        in / out / lateral
+                         GET /api/asn              egress by provider
+  Connections            GET /api/connections      the big table (filterable)
+  DNS Analytics          GET /api/dns              domains + verdicts
+  HTTP Analytics         GET /api/http             endpoints + status codes
+  Process Analytics      GET /api/processes        programs + risk
+  Alerts                 GET /api/alerts           alert list (filterable)
+                         PATCH /api/alerts/:id     change one alert's status
+
+You can test any of them without the browser:
+
+    curl http://localhost:3000/api/alerts
+
+
+-------------------------------------------------------------------------------
+ABOUT FILTERING  --  THE ONE THING THAT NEEDS CARE
+-------------------------------------------------------------------------------
+
+Two routes accept filters in the address:
+
+    /api/connections?protocol=HTTPS&severity=high&status=active
+    /api/alerts?severity=critical&status=open
+
+Right now the filtering happens in JavaScript AFTER loading the whole fake
+array. That is fine for 60 made-up rows.
+
+It is NOT fine for a real database. Do not load a million rows into memory and
+then throw most of them away. Build the filters into your SQL instead:
+
+    const { protocol, severity } = req.query;
+    const where = [];
+    const values = [];
+
+    if (protocol && protocol !== 'All') {
+      values.push(protocol);
+      where.push('protocol = $' + values.length);
+    }
+    if (severity && severity !== 'All') {
+      values.push(severity);
+      where.push('severity = $' + values.length);
+    }
+
+    const sql = 'SELECT * FROM connections' +
+                (where.length ? ' WHERE ' + where.join(' AND ') : '') +
+                ' ORDER BY start_time DESC LIMIT 500';
+
+    const result = await db.query(sql, values);
+    res.json({ rows: result.rows, total: result.rowCount });
+
+Note `values.push(...)` with `$1`, `$2` placeholders rather than gluing the
+user's text straight into the SQL string. That is what stops SQL injection.
+Never write: `WHERE protocol = '` + protocol + `'`
+
+
+-------------------------------------------------------------------------------
+THE PATCH ROUTE (the only one that writes)
+-------------------------------------------------------------------------------
+
+`PATCH /api/alerts/:id` is called when someone clicks Acknowledge or Resolve.
+
+At the moment it validates the input, logs it, and replies:
+
+    { "id": "ALR-1041", "status": "resolved", "saved": false }
+
+That `saved: false` is deliberate honesty -- the frontend shows a message
+telling the user it did not really save. Once you write it to a database,
+return `saved: true` and that warning disappears on its own.
+
+
+-------------------------------------------------------------------------------
+ERRORS
+-------------------------------------------------------------------------------
+
+Every route is wrapped in a helper called `safely()`. If your query throws,
+it logs the real reason to the terminal and sends the browser:
+
+    { "error": "Could not load this data. Check the server log." }
+
+The frontend then shows a red box on that panel instead of a blank space, and
+the rest of the page still works. Keep using `safely()` for your routes.
+
+
+-------------------------------------------------------------------------------
+A SUGGESTED ORDER OF WORK
+-------------------------------------------------------------------------------
+
+1. Get it running with the fake data first, so you know the baseline works.
+2. Pick ONE route -- `/api/overview` is the easiest, it is just six numbers.
+3. Replace it, refresh, confirm the cards show your numbers.
+4. Now you understand the pattern; do the rest.
+5. Do `/api/connections` and `/api/alerts` last, because of the filtering.
+6. Add the PATCH write once the reads are all working.
+
+
+-------------------------------------------------------------------------------
+THINGS NOT BUILT YET (be aware before you promise anything)
+-------------------------------------------------------------------------------
+
+  - No login, no authentication, no user accounts.
+  - No database. Nothing is stored anywhere.
+  - The PATCH route does not save.
+  - No HTTPS. Add that before anything goes on a real network.
+  - No rate limiting and no input size limits.
+  - The "3" badge on the Alerts menu item is hardcoded in
+    public/js/common.js (in the MENU list). Make it live when you have data.
+
+===============================================================================

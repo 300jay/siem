@@ -1,0 +1,657 @@
+===============================================================================
+NETWORKOPS DASHBOARD  --  CODE EXPLANATION
+===============================================================================
+Purpose: anyone can read this and explain the whole project, even without
+having written it. Plain language. Every function is covered.
+
+If you are here to connect a database, read BACKEND_GUIDE.txt instead.
+
+-------------------------------------------------------------------------------
+CONTENTS
+-------------------------------------------------------------------------------
+  1. What this is and how to run it
+  2. The folder layout and why it is shaped that way
+  3. How a page actually loads (the whole flow in 6 steps)
+  4. server.js
+  5. api/routes.js
+  6. api/mock-data.js
+  7. public/js/common.js  -- every function
+  8. The per-page JavaScript files -- every function
+  9. The galaxy background (how the CSS works)
+  10. The colour scheme
+  11. Common questions with ready answers
+  12. Known limitations -- be honest about these
+
+
+===============================================================================
+1. WHAT THIS IS AND HOW TO RUN IT
+===============================================================================
+
+A network monitoring dashboard. It shows who is talking to whom on a network,
+how much data moves, and whether anything looks dangerous.
+
+Think of it as the dashboard of a car, but for a company's network. Speed,
+fuel and temperature become connections, traffic volume and alerts.
+
+TO RUN IT (two commands):
+
+    npm install     (once, downloads Express)
+    npm start
+
+Then open  http://localhost:3000  in a browser. Stop it with Ctrl + C.
+
+Needs Node.js 18 or newer. Check yours with:  node -v
+
+THERE ARE EIGHT PAGES:
+
+    Dashboard              overview: six metric cards, traffic chart
+    Traffic Intelligence   where traffic goes in the world
+    Connections            searchable table of every connection
+    Network Analytics      protocol breakdown, performance numbers
+    DNS Analytics          which domains are being looked up
+    HTTP Analytics         web request volume and error rates
+    Process Analytics      which programs are opening connections
+    Alerts                 things that need a human to look at them
+
+
+===============================================================================
+2. THE FOLDER LAYOUT AND WHY IT IS SHAPED THAT WAY
+===============================================================================
+
+    netops-dashboard/
+    |
+    +-- package.json          lists what the project needs (Express)
+    +-- server.js             starts the web server
+    |
+    +-- api/                  THE BACK END
+    |   +-- routes.js           every web address the frontend can ask for
+    |   +-- mock-data.js        all the fake data, in one place
+    |
+    +-- public/               THE FRONT END (everything the browser sees)
+    |   +-- index.html          the Dashboard page
+    |   +-- pages/              the other seven pages
+    |   +-- css/styles.css      all styling, all pages
+    |   +-- js/common.js        shared code every page uses
+    |   +-- js/<pagename>.js    one file per page
+    |
+    +-- BACKEND_GUIDE.txt     for whoever connects the database
+    +-- EXPLANATION.txt       this file
+
+WHY THE FRONT AND BACK ARE SEPARATE FOLDERS
+Everything inside `public/` is sent to the browser. Everything outside it
+never leaves the server. So database passwords belong outside `public/`.
+This split is not decoration -- it is a security boundary.
+
+WHY ONE JS FILE PER PAGE
+Each page only loads the code it needs. The Alerts page does not download the
+connections table logic. It also makes the code easy to find: a bug on the
+DNS page is in `js/dns-analytics.js` and nowhere else.
+
+WHY common.js EXISTS ANYWAY
+The sidebar, the header and the helpers are identical on all eight pages.
+Without a shared file you would copy them eight times, and they would drift
+apart the moment somebody edited one. See section 7.
+
+
+===============================================================================
+3. HOW A PAGE ACTUALLY LOADS (THE WHOLE FLOW IN 6 STEPS)
+===============================================================================
+
+Using the Alerts page as the example. This is the single most useful thing to
+be able to explain.
+
+  1. You click Alerts. The browser asks the server for
+     http://localhost:3000/pages/alerts.html
+
+  2. server.js sees it is not an /api/ address, so it serves the matching file
+     from the public folder: public/pages/alerts.html
+
+  3. The browser reads that HTML. It is mostly empty on purpose -- the content
+     areas just say "Loading". At the bottom it loads two scripts:
+         common.js   (first)
+         alerts.js   (second)
+
+  4. common.js runs. It builds the sidebar and the header and injects them
+     into the page. It knows to highlight "Alerts" because the <body> tag says
+     data-page="alerts".
+
+  5. alerts.js runs. It calls NetOps.getJSON('/api/alerts'), which asks the
+     server for that address.
+
+  6. server.js sees /api/ this time, so it hands over to api/routes.js, which
+     returns the alert data as JSON. alerts.js turns that JSON into HTML cards
+     and swaps them in where "Loading" was.
+
+THE KEY POINT: the HTML file contains no data. The data arrives separately and
+JavaScript puts it on screen. That is why connecting a real database does not
+require touching any HTML.
+
+
+===============================================================================
+4. server.js
+===============================================================================
+
+About 60 lines. It does four things, in this order:
+
+    app.use(express.json())
+        Lets the server understand JSON sent by the browser. Needed for the
+        Acknowledge and Resolve buttons, which send data rather than just ask
+        for it.
+
+    app.use((req, res, next) => { ...log... next(); })
+        Prints one line per request to the terminal, e.g.  "GET /api/alerts".
+        Very useful while debugging. `next()` means "I am done, carry on to
+        the next step" -- forget it and the request hangs forever.
+
+    app.use('/api', apiRoutes)
+        Anything starting with /api/ is handed to api/routes.js.
+        The '/api' prefix is added here, which is why a route written as
+        '/alerts' in routes.js becomes '/api/alerts' in the browser.
+
+    app.use(express.static('public'))
+        Serves every file in public/ exactly as it sits on disk.
+        This comes AFTER the API line, which matters -- Express checks these
+        in order, and the API must get first refusal on /api/ addresses.
+
+    A final catch-all that sends a readable 404 page instead of a blank screen.
+
+WHY DO WE NEED A SERVER AT ALL?
+Two reasons. First, a browser blocks pages opened directly from the hard drive
+from fetching files, so the data would never load. Second, the real database
+will live behind this server -- the browser must never talk to a database
+directly, or anyone could read your credentials.
+
+
+===============================================================================
+5. api/routes.js
+===============================================================================
+
+This is the list of web addresses the frontend is allowed to ask for.
+
+safely(handler)
+    A wrapper used by every route. It runs the route inside a try/catch. If
+    anything throws -- a database being down, for example -- it logs the real
+    reason to the terminal and sends the browser a clean error message instead
+    of crashing the whole server.
+
+    Without this, one bad query takes the entire dashboard offline.
+
+Each route then follows the same pattern:
+
+    router.get('/overview', safely(async (req, res) => {
+      res.json(mock.getOverviewMetrics());
+    }));
+
+    - `router.get` means "when someone ASKS for this address"
+    - `res.json(x)` means "send x back as JSON"
+
+There are 13 reading routes and 1 writing route:
+
+    GET  /api/overview, /api/traffic-series, /api/connection-status,
+         /api/protocols, /api/performance, /api/geo, /api/direction,
+         /api/asn, /api/connections, /api/dns, /api/http, /api/processes,
+         /api/alerts
+    PATCH /api/alerts/:id
+
+FILTERING
+`/api/connections` and `/api/alerts` read filters out of the web address via
+`req.query`. So `/api/connections?severity=high` arrives as
+`req.query.severity === 'high'`, and the route filters before replying.
+
+This is deliberate: the SERVER filters, not the browser. With a real database
+holding millions of rows you must never send them all to the browser.
+
+THE PATCH ROUTE
+`PATCH /api/alerts/:id` is the only route that changes something. `:id` is a
+placeholder -- asking for `/api/alerts/ALR-1041` makes `req.params.id` equal
+"ALR-1041". It checks the new status is one of three allowed words, then
+replies `{ saved: false }` because there is no database yet.
+
+
+===============================================================================
+6. api/mock-data.js
+===============================================================================
+
+Every fake number in the whole project lives here and nowhere else. That is
+the point of the file -- when real data arrives, there is exactly one place
+that becomes obsolete.
+
+It exports 13 functions, one per route:
+
+    getOverviewMetrics()    the six dashboard cards
+    getTrafficSeries()      24 hourly points for the line chart
+    getConnectionStatus()   active vs closed counts
+    getProtocols()          HTTPS, TCP, DNS... with counts and shares
+    getPerformance()        latency, packet loss, throughput, jitter
+    getGeoTraffic()         top 10 countries
+    getTrafficDirection()   inbound / outbound / lateral percentages
+    getAsnTraffic()         egress by network provider
+    getConnections()        60 generated connection rows
+    getDnsAnalytics()       domain lookups with a threat verdict
+    getHttpAnalytics()      endpoints, response times, status codes
+    getProcessAnalytics()   programs with a risk rating
+    getAlerts()             7 alerts of varying severity
+
+jitter(base, percent)
+    A tiny helper that nudges a number up or down randomly so the dashboard
+    looks slightly different on each reload. Purely cosmetic. Delete it once
+    real data is connected.
+
+Above each function is a comment starting with `SHAPE:` showing exactly which
+fields it returns. That comment is the contract -- a real database query must
+produce the same field names.
+
+
+===============================================================================
+7. public/js/common.js  --  EVERY FUNCTION
+===============================================================================
+
+Loaded first by all eight pages. Everything it provides is attached to
+`window.NetOps` so the page files can reach it, e.g. NetOps.formatBytes(1024).
+
+--- THE MENU ---------------------------------------------------------------
+
+MENU (a list, not a function)
+    The sidebar definition: three groups, each with items that have an id,
+    label, icon and target file. Edit this ONE list and the sidebar changes on
+    all eight pages at once.
+
+    Note where things sit: Network Analytics is inside the "Analytics" group
+    alongside DNS, HTTP and Process. Administration holds only Alerts.
+
+linkFor(item)
+    Works out the correct link. index.html sits at the top level and the other
+    pages sit inside pages/, so a link from one to the other needs a different
+    prefix. This handles that, using `toRoot` and `toPages` which are worked
+    out once by checking whether the address contains "/pages/".
+
+buildShell()
+    Runs automatically on page load. It:
+      1. adds the three galaxy background layers
+      2. builds the sidebar HTML from MENU and inserts it
+      3. builds the top header and inserts it
+      4. highlights the current item by comparing each menu id against the
+         <body> tag's data-page attribute
+
+    This is why the HTML files are so short -- they contain only their own
+    content, never the navigation.
+
+--- SEARCH -----------------------------------------------------------------
+
+wireSearch()
+    Connects the header search box. Waits 250ms after you stop typing before
+    searching. This is called DEBOUNCING.
+
+    Why: typing "connection" is 10 keystrokes. Without the wait that is 10
+    searches, 9 of them instantly discarded. With it, 1 search.
+
+    Also clears on Escape, and listens for Ctrl+K (Cmd+K on Mac) to jump
+    focus into the box.
+
+filterTables(text)
+    Hides any table row that does not contain the typed text. Uses
+    `style.display = 'none'` to hide and `''` to show again.
+
+--- TALKING TO THE SERVER --------------------------------------------------
+
+getJSON(url)
+    THE most important function in the frontend. Every page uses it.
+
+        const data = await NetOps.getJSON('/api/alerts');
+
+    It asks the server for the address, checks the reply was OK, and converts
+    the JSON into a normal JavaScript object. If the server returns an error
+    code it throws, which the calling page catches and shows as a red box.
+
+    `await` means "wait for this to finish before continuing". Any function
+    using it must be marked `async`.
+
+sendJSON(url, method, body)
+    The same idea but for CHANGING data. Used only by the Alerts page to send
+    PATCH requests. Sets the Content-Type header so the server knows to expect
+    JSON.
+
+--- FORMATTING HELPERS -----------------------------------------------------
+
+formatNumber(n)
+    9014 becomes "9K", 1500000 becomes "1.5M". Large raw numbers are hard to
+    read at a glance.
+
+formatBytes(bytes)
+    1048576 becomes "1 MB". Divides by 1024 repeatedly and counts how many
+    times, then picks the matching unit from B/KB/MB/GB/TB.
+
+formatTime(iso)
+    A timestamp becomes "14 Oct, 11:42" using the browser's built-in
+    toLocaleString, so it automatically respects the viewer's region.
+
+timeAgo(iso)
+    A timestamp becomes "6 min ago". Used on the Alerts page, where "how long
+    ago" matters more than the exact clock time.
+
+escapeHtml(text)
+    SECURITY FUNCTION -- worth understanding. It converts < > & " ' into their
+    harmless text equivalents.
+
+    Why it matters: if a domain name in the database were
+    `<script>steal()</script>` and we dropped it straight into the page, the
+    browser would RUN it. That attack is called XSS (cross-site scripting).
+    Running text through escapeHtml first makes the browser display it instead
+    of executing it. Every piece of server text in this project goes through
+    it.
+
+showLoading(el, message)
+    Puts a spinner into an element while its data loads.
+
+showError(el, error)
+    Puts a red error box into an element and logs the full error to the
+    console. Used by every page's catch block.
+
+--- DRAWING ----------------------------------------------------------------
+
+drawLineChart(svg, points)
+    Draws the traffic chart by hand as SVG -- no chart library.
+    Steps: find the biggest value, build x() and y() functions that convert a
+    data value into a position on screen, draw 4 faint grid lines with labels,
+    draw the line as a <polyline>, draw the shaded area under it as a
+    <polygon>, then add a dot and hour label on every 4th point.
+
+    "viewBox" lets the chart scale to any width while keeping the maths simple
+    -- the code always works in a fixed 600x210 space and the browser scales it.
+
+drawBars(container, rows)
+    Draws a list of horizontal bars. Each row is label, track and value. The
+    bar width is a percentage of the biggest value in the set. CSS animates
+    the width, so bars slide out when data loads.
+
+drawDonut(svg, slices)
+    Draws the ring chart on Traffic Intelligence. The clever bit: instead of
+    calculating arcs, it draws one full circle per slice with a thick stroke,
+    then uses `stroke-dasharray` to show only part of that circle, and
+    `stroke-dashoffset` to rotate each one so they sit end to end. Much
+    simpler than arc maths.
+
+--- EXPORT -----------------------------------------------------------------
+
+exportTableToCSV(filename)
+    Turns the page's table into a CSV file and downloads it.
+    Steps: loop every row, collect each cell's text, wrap each value in double
+    quotes, join with commas, join rows with line breaks. Any quote already
+    inside a value is doubled ("") -- the CSV escaping rule that stops one
+    stray quote corrupting the file. Rows hidden by a filter are skipped, so
+    you export what you can see.
+
+    It then creates a Blob (a file held in memory), makes an invisible link
+    pointing at it, and clicks that link with code. Nothing is sent anywhere
+    -- the file is built entirely in the browser.
+
+wireExportButton()
+    Connects any button with the class "export-btn" to the function above.
+
+
+===============================================================================
+8. THE PER-PAGE JAVASCRIPT FILES
+===============================================================================
+
+All of them follow the same three-step shape:
+    1. wait for the page to be ready
+    2. call the server with NetOps.getJSON
+    3. turn the reply into HTML
+
+and all of them wrap step 2 in try/catch so a failure shows a red box rather
+than a blank panel.
+
+--- js/dashboard.js  (index.html) ------------------------------------------
+
+loadEverything()      calls the four loaders below
+loadMetrics()         /api/overview -> the six cards
+loadTrafficChart()    /api/traffic-series -> the line chart
+loadConnectionStatus()/api/connection-status -> active vs closed bars
+loadProtocols()       /api/protocols -> top five protocols as bars
+setupLiveButton()
+    The Go Live button. Re-fetches everything every 10 seconds while on.
+    IMPORTANT DETAIL: the timer is stored in a variable so it can be stopped
+    with clearInterval when switched off. Forgetting that is the classic bug
+    that leaves several timers running at once and makes numbers jump about.
+
+--- js/network-analytics.js ------------------------------------------------
+
+loadPerformance()   /api/performance -> four tiles; colours the number green,
+                    amber or red based on the "status" field
+loadProtocols()     /api/protocols -> both the bars and the full table
+
+--- js/traffic-intelligence.js ---------------------------------------------
+
+loadDirection()     /api/direction -> the donut plus its legend
+loadAsn()           /api/asn -> provider bars
+loadGeo()           /api/geo -> the country table; works out each country's
+                    share by dividing into the total
+
+--- js/connections.js ------------------------------------------------------
+
+buildUrl()
+    Builds the address with the current filters attached, using
+    URLSearchParams -- which safely escapes special characters so a filter
+    containing a space or an & cannot break the address.
+loadConnections()   fetches and draws the table
+statusPill(status)  "active" -> green pill, "closed" -> grey
+severityPill(sev)   high -> red, medium -> amber, low -> purple, none -> grey
+
+    NOTE: the filters here are sent TO THE SERVER rather than applied in the
+    browser. That is the right way round for real data.
+
+--- js/dns-analytics.js ----------------------------------------------------
+
+loadPage()          /api/dns -> four summary tiles, bars and the table
+verdictPill(v)      clean -> green, suspicious -> amber, blocked -> red
+                    Bars are coloured by verdict too, so a risky domain is
+                    visible without reading the table.
+
+--- js/http-analytics.js ---------------------------------------------------
+
+loadPage()          /api/http -> tiles, status-code bars, endpoint table
+statusPill(code)    under 400 green, 400s amber, 500s red
+                    Endpoints slower than 500ms get an amber response time.
+
+--- js/process-analytics.js ------------------------------------------------
+
+loadPage()          /api/processes -> bars and the table
+riskPill(risk)      high -> red, medium -> amber, low -> green
+
+--- js/alerts.js -----------------------------------------------------------
+
+The most complete page, because it both reads AND writes.
+
+buildUrl()          attaches the severity and status dropdown filters
+loadAlerts()        fetches and draws everything
+drawCounts(box,rows)the four counters along the top, counted from the rows
+buildAlertCard(a)   builds one alert card's HTML. A resolved alert gets no
+                    buttons; an acknowledged one gets only Resolve.
+wireActionButtons()
+    Connects Acknowledge and Resolve. Sends a PATCH, disables the button while
+    saving, then reloads the list. If the server replies `saved: false` it
+    tells the user plainly that the change will not stick, rather than
+    pretending it worked.
+
+
+===============================================================================
+9. THE GALAXY BACKGROUND (HOW THE CSS WORKS)
+===============================================================================
+
+Three stacked layers, all pure CSS. No images, no JavaScript, no library.
+They are added by buildShell() in common.js and styled in section 2 of
+styles.css.
+
+  .galaxy
+      Two or three very large, very soft radial-gradients in orange and
+      purple -- the coloured clouds. Slowly drifts and scales via the
+      `nebula-drift` animation over 48 seconds.
+
+  .galaxy-stars
+      THE TRICK WORTH EXPLAINING: a radial-gradient can be made so small that
+      it paints a single dot. Listing 16 of them in one `background-image`
+      paints a whole starfield with no image file at all. `background-size`
+      then tiles that pattern across the screen. The `star-twinkle` animation
+      fades the whole layer in and out slightly.
+
+  .galaxy-glints
+      Fewer, bigger, brighter sparkles that drift slowly upward
+      (`glint-float`) while pulsing (`glint-pulse`).
+
+All three are `position: fixed` with `z-index: -1` so they sit behind
+everything, and `pointer-events: none` so they can never block a click.
+
+ACCESSIBILITY
+At the end of that section is:
+
+    @media (prefers-reduced-motion: reduce) { ... animation: none ... }
+
+If someone has told their operating system they get motion sickness or simply
+prefer less movement, all the animation stops. The galaxy still appears, it
+just holds still. This is a real accessibility setting, not decoration.
+
+
+===============================================================================
+10. THE COLOUR SCHEME
+===============================================================================
+
+Black base, orange and purple as the two signature colours.
+
+    #07060f   near-black     the page
+    #0a0814   darker         sidebar
+    #120f20   dark purple    cards and panels
+    #251d40   border         thin dividing lines
+    #f3f0ff   near-white     main text
+    #9a92b8   muted          secondary text
+
+    #ff7a18   ORANGE         primary actions, the traffic line, highlights
+    #a855f7   PURPLE         secondary data, accents
+
+    #35e0a1   green          good / allowed / resolved
+    #ffc53d   amber          warning / medium severity
+    #ff5c7a   red            bad / blocked / critical
+
+All of these are defined once as CSS variables at the top of styles.css:
+
+    :root { --orange: #ff7a18; ... }
+
+and used everywhere as `var(--orange)`. Change the value in that one place
+and it updates across all eight pages instantly. That is the whole reason to
+use variables rather than typing the hex code in 200 places.
+
+The colour logic is deliberate: orange and purple carry identity, while
+green/amber/red only ever carry MEANING. A red thing on this dashboard always
+means something is wrong -- it is never just decoration.
+
+TYPOGRAPHY
+
+Two typefaces, loaded from Google Fonts in the <head> of every page:
+
+    Barlow          everything you read -- headings, labels, body text
+    IBM Plex Mono   numbers and data only
+
+Barlow is a slightly condensed grotesk. Condensed matters on a dashboard:
+labels like "SUSPICIOUS DESTINATIONS" fit on one line instead of wrapping,
+so cards stay the same height and the grid stays tidy.
+
+IBM Plex Mono is kept for figures because it is MONOSPACED -- every character
+is exactly the same width, so columns of numbers line up vertically and you
+can compare them down a table at a glance. A proportional font would make
+"1,480" narrower than "3,120" and the column would look ragged.
+
+Both are set once in styles.css:
+
+    --font:      'Barlow', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-mono: 'IBM Plex Mono', 'Consolas', monospace;
+
+The names after the first one are FALLBACKS. If Barlow fails to load -- no
+internet, for example -- the browser walks down that list and uses the first
+one it has, so the dashboard still looks sane rather than defaulting to
+Times New Roman.
+
+
+===============================================================================
+11. COMMON QUESTIONS WITH READY ANSWERS
+===============================================================================
+
+Q: Why Node.js and not just opening the HTML file?
+A: Two reasons. Browsers block pages opened from the hard drive from fetching
+   data, so nothing would load. And the real database must sit behind a
+   server -- a browser can never be allowed to talk to a database directly.
+
+Q: Why one JavaScript file per page?
+A: Each page only downloads what it needs, and bugs are easy to locate. The
+   genuinely shared parts live in common.js so they are written once.
+
+Q: Where does the data come from right now?
+A: api/mock-data.js, which is entirely made up. The frontend cannot tell the
+   difference, which is exactly the point -- swapping in a real database
+   requires no frontend changes.
+
+Q: How does the sidebar know which page is open?
+A: Each HTML file's <body> tag carries data-page="something". common.js
+   compares that against the id of each menu item and highlights the match.
+
+Q: What is debouncing?
+A: Waiting until the user stops typing before acting. Ten keystrokes trigger
+   one search instead of ten.
+
+Q: Why is escapeHtml everywhere?
+A: To stop XSS. If text from the server contained HTML or a script tag and we
+   inserted it raw, the browser would run it. escapeHtml makes it display as
+   plain text instead.
+
+Q: How does the CSV export work with no server?
+A: The JavaScript builds the file contents as text, holds it in memory as a
+   Blob, creates an invisible link to it, and clicks that link with code. The
+   browser treats it as a normal download. Nothing is uploaded anywhere.
+
+Q: How are the charts drawn without a chart library?
+A: By hand as SVG. The line chart converts each data value into an x,y screen
+   position and draws a polyline. The donut uses stroke-dasharray on circles
+   so no arc maths is needed.
+
+Q: What is the hardest part of the code?
+A: drawDonut, because the dasharray trick is not obvious. After that,
+   debouncing in wireSearch.
+
+Q: Is the galaxy background slow?
+A: No. It is three CSS layers with no images and no JavaScript, and it is
+   composited by the GPU. It also stops moving entirely for anyone who has
+   asked their system for reduced motion.
+
+
+===============================================================================
+12. KNOWN LIMITATIONS -- BE HONEST ABOUT THESE
+===============================================================================
+
+Claiming more than the project does is risky. These are the real gaps, each
+with a one-line honest answer:
+
+  1. All data is made up, from api/mock-data.js. No real network is monitored.
+
+  2. There is no database. Nothing is saved anywhere.
+
+  3. The Acknowledge / Resolve buttons send their request correctly but the
+     server does not save it, so the change disappears on refresh. The app
+     says so on screen rather than hiding it.
+
+  4. No login, no authentication, no user accounts.
+
+  5. No HTTPS. Required before this goes on a real network.
+
+  6. The "3" badge on the Alerts menu item is hardcoded in the MENU list in
+     common.js.
+
+  7. The account button in the header does nothing yet.
+
+  8. Filtering on /api/connections happens in JavaScript after loading all
+     rows. Fine for 60 fake rows, wrong for a real database -- it needs to
+     become a SQL WHERE clause. This is written up in BACKEND_GUIDE.txt.
+
+A good closing line if someone pushes:
+"It is a complete, working front end with a real Node.js server and a clean
+API boundary. Every screen and interaction is real -- the data behind them is
+the next piece of work, and it plugs into exactly one file."
+
+===============================================================================

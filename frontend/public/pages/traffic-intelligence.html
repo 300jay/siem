@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Traffic Intelligence · NetworkOps</title>
+  <link rel="stylesheet" href="../css/styles.css">
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+
+<!-- data-page tells common.js which sidebar item to highlight -->
+<body data-page="traffic">
+
+  <div class="app-container">
+    <!-- common.js inserts the sidebar here -->
+    <main class="main-content">
+      <!-- common.js inserts the top header here -->
+      <div class="page-content">
+
+        <div class="page-header">
+          <h1>Traffic Intelligence</h1>
+          <p class="page-description">Where traffic is going in the world, which direction it flows, and which providers carry it.</p>
+        </div>
+
+        <div class="page-controls">
+          <button class="btn" id="refresh-btn">↻ Refresh</button>
+          <button class="btn btn-primary export-btn">⬇ Export CSV</button>
+        </div>
+
+        <div class="panel-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>Traffic Direction</h3>
+              <span class="panel-meta">share of total</span>
+            </div>
+            <div class="donut-wrap">
+              <svg id="direction-donut" class="donut"></svg>
+              <div id="direction-legend" class="donut-legend"></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h3>Egress by Provider</h3>
+              <span class="panel-meta">ASN, by data volume</span>
+            </div>
+            <div id="asn-bars"><div class="loading">Loading</div></div>
+          </div>
+        </div>
+
+        <div class="panel panel-wide">
+          <div class="panel-header">
+            <h3>Traffic by Country</h3>
+            <span class="panel-meta">top 10 destinations</span>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="geo-table">
+              <thead>
+                <tr><th>Country</th><th>Code</th><th>Connections</th><th>Data Transferred</th><th>Share</th></tr>
+              </thead>
+              <tbody><tr><td colspan="5"><div class="loading">Loading</div></td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/common.js"></script>
+  <script src="../js/traffic-intelligence.js"></script>
+</body>
+</html>

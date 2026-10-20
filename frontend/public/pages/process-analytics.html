@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Process Analytics · NetworkOps</title>
+  <link rel="stylesheet" href="../css/styles.css">
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+
+<!-- data-page tells common.js which sidebar item to highlight -->
+<body data-page="process">
+
+  <div class="app-container">
+    <!-- common.js inserts the sidebar here -->
+    <main class="main-content">
+      <!-- common.js inserts the top header here -->
+      <div class="page-content">
+
+        <div class="page-header">
+          <h1>Process Analytics</h1>
+          <p class="page-description">Which programs on which machines are opening network connections, and how much they use.</p>
+        </div>
+
+        <div class="page-controls">
+          <button class="btn" id="refresh-btn">↻ Refresh</button>
+          <button class="btn btn-primary export-btn">⬇ Export CSV</button>
+        </div>
+
+        <div class="panel-grid">
+          <div class="panel panel-wide">
+            <div class="panel-header">
+              <h3>Connections by Process</h3>
+              <span class="panel-meta">busiest first</span>
+            </div>
+            <div id="process-bars"><div class="loading">Loading</div></div>
+          </div>
+        </div>
+
+        <div class="panel panel-wide">
+          <div class="panel-header">
+            <h3>Process Detail</h3>
+            <span class="panel-meta">with risk rating</span>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="process-table">
+              <thead>
+                <tr><th>Process</th><th>Host</th><th>Connections</th><th>Data</th><th>CPU</th><th>Risk</th></tr>
+              </thead>
+              <tbody><tr><td colspan="6"><div class="loading">Loading</div></td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/common.js"></script>
+  <script src="../js/process-analytics.js"></script>
+</body>
+</html>
