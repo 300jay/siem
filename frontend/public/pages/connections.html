@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connections · NetworkOps</title>
+  <link rel="stylesheet" href="../css/styles.css">
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+
+<!-- data-page tells common.js which sidebar item to highlight -->
+<body data-page="connections">
+
+  <div class="app-container">
+    <!-- common.js inserts the sidebar here -->
+    <main class="main-content">
+      <!-- common.js inserts the top header here -->
+      <div class="page-content">
+
+        <div class="page-header">
+          <h1>Connections Explorer</h1>
+          <p class="page-description">Every active and recent connection, with filters and threat severity.</p>
+        </div>
+
+        <div class="page-controls">
+          <button class="btn" id="refresh-btn">↻ Refresh</button>
+          <button class="btn btn-primary export-btn">⬇ Export CSV</button>
+        </div>
+
+        <div class="filter-panel">
+          <div class="panel-header">
+            <h3>Filters</h3>
+            <button class="btn btn-sm" id="reset-filters">Reset</button>
+          </div>
+          <div class="filter-grid">
+            <div class="filter-field">
+              <label class="filter-label" for="f-source">Source IP</label>
+              <input class="filter-input" id="f-source" placeholder="e.g. 192.168">
+            </div>
+            <div class="filter-field">
+              <label class="filter-label" for="f-destination">Destination IP</label>
+              <input class="filter-input" id="f-destination" placeholder="e.g. 45.113">
+            </div>
+            <div class="filter-field">
+              <label class="filter-label" for="f-protocol">Protocol</label>
+              <select class="filter-select" id="f-protocol">
+                <option>All</option><option>HTTPS</option><option>TCP</option>
+                <option>DNS</option><option>HTTP</option><option>ICMP</option>
+              </select>
+            </div>
+            <div class="filter-field">
+              <label class="filter-label" for="f-severity">Severity</label>
+              <select class="filter-select" id="f-severity">
+                <option>All</option><option value="high">High</option>
+                <option value="medium">Medium</option><option value="low">Low</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+            <div class="filter-field">
+              <label class="filter-label" for="f-status">Status</label>
+              <select class="filter-select" id="f-status">
+                <option>All</option><option value="active">Active</option>
+                <option value="closed">Closed</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel panel-wide">
+          <div class="panel-header">
+            <h3>Live Connections</h3>
+            <span class="panel-meta" id="row-count">&nbsp;</span>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="connections-table">
+              <thead>
+                <tr>
+                  <th>Session ID</th><th>Status</th><th>Started</th><th>Source</th>
+                  <th>Destination</th><th>Protocol / Port</th><th>Data</th>
+                  <th>Duration</th><th>Severity</th>
+                </tr>
+              </thead>
+              <tbody><tr><td colspan="9"><div class="loading">Loading</div></td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/common.js"></script>
+  <script src="../js/connections.js"></script>
+</body>
+</html>

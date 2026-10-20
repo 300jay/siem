@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Alerts · NetworkOps</title>
+  <link rel="stylesheet" href="../css/styles.css">
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+
+<!-- data-page tells common.js which sidebar item to highlight -->
+<body data-page="alerts">
+
+  <div class="app-container">
+    <!-- common.js inserts the sidebar here -->
+    <main class="main-content">
+      <!-- common.js inserts the top header here -->
+      <div class="page-content">
+
+        <div class="page-header">
+          <h1>Alerts</h1>
+          <p class="page-description">Everything the system wants you to look at, newest first. Acknowledge one to show you have seen it, resolve it when it is dealt with.</p>
+        </div>
+
+        <div class="page-controls">
+          <select class="filter-select" id="f-severity" style="min-width:150px">
+            <option value="All">All severities</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+          <select class="filter-select" id="f-status" style="min-width:150px">
+            <option value="All">All statuses</option>
+            <option value="open">Open</option>
+            <option value="acknowledged">Acknowledged</option>
+            <option value="resolved">Resolved</option>
+          </select>
+          <button class="btn" id="refresh-btn">↻ Refresh</button>
+        </div>
+
+        <div id="alert-counts" class="stat-grid" style="margin-bottom:20px">
+          <div class="loading">Loading</div>
+        </div>
+
+        <div id="alert-list" class="alert-list">
+          <div class="loading">Loading alerts</div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/common.js"></script>
+  <script src="../js/alerts.js"></script>
+</body>
+</html>

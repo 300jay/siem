@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard · NetworkOps</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+
+<!-- data-page tells common.js which sidebar item to highlight -->
+<body data-page="dashboard">
+
+  <div class="app-container">
+    <!-- common.js inserts the sidebar here -->
+    <main class="main-content">
+      <!-- common.js inserts the top header here -->
+      <div class="page-content">
+
+        <div class="page-header">
+          <h1>Network Analytics Dashboard</h1>
+          <p class="page-description">
+            A live overview of network communications, traffic patterns and threat activity.
+          </p>
+        </div>
+
+        <div class="page-controls">
+          <button class="btn" id="live-btn">▶ Go Live</button>
+          <button class="btn" id="refresh-btn">↻ Refresh</button>
+        </div>
+
+        <!-- The six metric cards. dashboard.js fills this in. -->
+        <div id="metrics" class="metrics-grid">
+          <div class="loading">Loading metrics</div>
+        </div>
+
+        <div class="panel-grid">
+          <div class="panel panel-wide">
+            <div class="panel-header">
+              <h3>Network Traffic Over Time</h3>
+              <span class="panel-meta">last 24 hours, hourly</span>
+            </div>
+            <svg id="traffic-chart" class="line-chart"></svg>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>Connection Status</h3>
+              <span class="panel-meta">active vs closed</span>
+            </div>
+            <div id="status-bars"><div class="loading">Loading</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h3>Top Protocols</h3>
+              <span class="panel-meta">by connection count</span>
+            </div>
+            <div id="protocol-bars"><div class="loading">Loading</div></div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <script src="js/common.js"></script>
+  <script src="js/dashboard.js"></script>
+</body>
+</html>
